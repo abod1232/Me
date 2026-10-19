@@ -1,5 +1,5 @@
 const CONFIG = {
-  tmdbApiKey: "439c478a771f35c05022f9feabcca01c",
+  tmdbApiKey: "1c29a5198ee1854bd5eb45dbe8d17d92",
   tmdbEndpoint: "https://api.themoviedb.org/3",
   host: "https://cinemana.shabakaty.cc",
   apiRoot: "https://cinemana.shabakaty.cc/api/android",
@@ -118,10 +118,15 @@ async function collectSubtitles(videoId) {
 
     return ordered
       .filter((item) => typeof item.file === "string" && item.file.trim().length > 0)
-      .map((item) => ({
-        url: item.file.startsWith("http") ? item.file : `${CONFIG.host}${item.file}`,
-        lang: (item.extention || "").toLowerCase() === "ass" ? `${item.name || "العربية"} (ASS)` : (item.name || "العربية")
-      }));
+      .map((item) => {
+        const isAss = (item.extention || "").toLowerCase() === "ass";
+        const label = item.name || "العربية";
+        return {
+          url: item.file.startsWith("http") ? item.file : `${CONFIG.host}${item.file}`,
+          lang: "Arabic",
+          name: isAss ? `${label} (ASS)` : label
+        };
+      });
   } catch {
     return [];
   }
