@@ -5,9 +5,9 @@
     {
       "id": "cinemana",
       "name": "cinemana",
-      "description": "مشاهدة الأنمي المترجم عبر سيرفرات Anime3rb",
+      "description": "فقط في  العراق يعمل",
       "version": "1.0.0",
-      "author": "abod1232",
+      "author": "abodabodd",
       "supportedTypes": [
         "movie",
         "tv",
@@ -19,7 +19,7 @@
         "mp4",
         "mkv"
       ],
-      "logo": "https://anime3rb.com/favicon.ico",
+      "logo": "",
       "contentLanguage": [
         "ar"
       ]
