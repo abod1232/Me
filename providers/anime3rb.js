@@ -8,7 +8,6 @@ const BROWSER_UA =
 
 const log = (...a) => console.log("[Cinemana]", ...a);
 
-// تنظيف النصوص للمطابقة
 const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]+/g, "").trim();
 
 async function fetchJson(url) {
@@ -22,7 +21,7 @@ async function fetchJson(url) {
   return await res.json();
 }
 
-// 1. جلب العناوين والأسماء البديلة وسنة الإنتاج من TMDB
+// 1. جلب بيانات TMDB
 async function tmdbInfo(tmdbId, mediaType) {
   try {
     const type = mediaType === "movie" ? "movie" : "tv";
@@ -55,7 +54,7 @@ async function tmdbInfo(tmdbId, mediaType) {
   }
 }
 
-// 2. البحث في سينمانا (أفلام / مسلسلات)
+// 2. البحث في سينمانا
 async function searchCinemana(query, isMovie) {
   const type = isMovie ? "movies" : "series";
   const url = `${API}/AdvancedSearch?level=0&videoTitle=${encodeURIComponent(
@@ -67,12 +66,11 @@ async function searchCinemana(query, isMovie) {
     if (Array.isArray(data)) return data;
     return [];
   } catch (err) {
-    log(`Search error for "${query}":`, err.message);
     return [];
   }
 }
 
-// 3. مطابقة النتائج مع عناوين TMDB
+// 3. مطابقة العنوان
 function matchItem(items, titles, year) {
   for (const item of items) {
     const en = norm(item.en_title);
@@ -87,10 +85,7 @@ function matchItem(items, titles, year) {
       const isClose = (en && en.includes(target)) || (ar && ar.includes(target));
 
       if (isExact || isClose) {
-        // التحقق من السنة إن وُجدت
-        if (year && itemYear && Math.abs(year - itemYear) > 1) {
-          continue;
-        }
+        if (year && itemYear && Math.abs(year - itemYear) > 1) continue;
         return item;
       }
     }
@@ -98,7 +93,7 @@ function matchItem(items, titles, year) {
   return null;
 }
 
-// 4. استخراج الحلقة المطلوبة للمسلسلات
+// 4. استخراج الحلقة للمسلسلات
 async function resolveEpisodeVideoId(seriesId, seasonNum, episodeNum) {
   const url = `${API}/videoSeason/id/${seriesId}`;
   try {
@@ -112,53 +107,69 @@ async function resolveEpisodeVideoId(seriesId, seasonNum, episodeNum) {
     });
 
     return targetEp ? targetEp.nb : null;
-  } catch (e) {
-    log("Failed to fetch episodes:", e.message);
+  } catch {
     return null;
   }
 }
 
-// 5. استخراج الترجمات المتوفرة
+// 5. جلب الترجمات وتنسيقها مثل نموذج Idlix تماماً
 async function fetchSubtitles(videoId) {
   try {
     const detailsUrl = `${API}/allVideoInfo/id/${videoId}`;
     const details = await fetchJson(detailsUrl);
     const translations = details.translations || [];
 
-    return translations
-      .filter((t) => t.file)
-      .map((t) => ({
-        lang: t.name || "العربية",
-        url: t.file
-      }));
-  } catch {
+    // ترتيب الترجمات لإعطاء الأولوية لـ vtt و srt الأكثر توافقاً مع المشغلات
+    const sorted = translations.sort((a, b) => {
+      const extA = (a.extention || "").toLowerCase();
+      const extB = (b.extention || "").toLowerCase();
+      const rank = (ext) => (ext === "vtt" ? 0 : ext === "srt" ? 1 : 2);
+      return rank(extA) - rank(extB);
+    });
+
+    // تحويل الترجمات إلى الصيغة المعتمدة في Nuvio: { url, lang }
+    return sorted
+      .filter((sub) => sub.file && typeof sub.file === "string")
+      .map((sub) => {
+        let langName = sub.name || "العربية";
+        if (sub.extention && sub.extention.toLowerCase() === "ass") {
+          langName += " (ASS)";
+        }
+        return {
+          url: sub.file.startsWith("http") ? sub.file : `${MAIN}${sub.file}`,
+          lang: langName
+        };
+      });
+  } catch (err) {
+    log("Subtitles fetch error:", err.message);
     return [];
   }
 }
 
-// 6. استخراج روابط التشغيل المباشرة
+// 6. استخراج السيرفرات وربط الترجمة بها
 async function extractStreams(videoId, streamTitle) {
   const url = `${API}/transcoddedFiles/id/${videoId}`;
   try {
     const files = await fetchJson(url);
     if (!Array.isArray(files) || !files.length) return [];
 
-    // جلب ملفات الترجمة
+    // استخراج قائمة الترجمات مرة واحدة
     const subtitles = await fetchSubtitles(videoId);
     const out = [];
 
-    // ترتيب السيرفرات من الأعلى دقة إلى الأقل
     for (const file of files.reverse()) {
       const videoUrl = file.videoUrl;
       if (!videoUrl) continue;
 
       const resolution = file.resolution || "HD";
+
       out.push({
         name: `Cinemana - ${resolution}`,
         title: streamTitle,
         url: videoUrl,
         quality: resolution,
         size: "Unknown",
+        // هنا يتم تمرير الترجمات لكل سيرفر كما في Idlix
         subtitles: subtitles,
         headers: {
           "User-Agent": BROWSER_UA,
@@ -176,7 +187,7 @@ async function extractStreams(videoId, streamTitle) {
 }
 
 // ======================
-// Main Function (getStreams)
+// Main Provider Function
 // ======================
 
 async function getStreams(tmdbId, mediaType = "movie", seasonNum = null, episodeNum = null) {
@@ -188,10 +199,7 @@ async function getStreams(tmdbId, mediaType = "movie", seasonNum = null, episode
 
   try {
     const { titles, year } = await tmdbInfo(tmdbId, mediaType);
-    if (!titles.length) {
-      log("No titles found on TMDB");
-      return [];
-    }
+    if (!titles.length) return [];
 
     const streamTitle = `${titles[0]}${
       isMovie
@@ -201,7 +209,6 @@ async function getStreams(tmdbId, mediaType = "movie", seasonNum = null, episode
         : ` S${String(s).padStart(2, "0")}E${String(e).padStart(2, "0")}`
     }`;
 
-    // البحث في سينمانا
     let matchedItem = null;
     for (const title of titles.slice(0, 4)) {
       const results = await searchCinemana(title, isMovie);
@@ -209,31 +216,16 @@ async function getStreams(tmdbId, mediaType = "movie", seasonNum = null, episode
       if (matchedItem) break;
     }
 
-    if (!matchedItem || !matchedItem.nb) {
-      log("Not found on Cinemana");
-      return [];
-    }
-
-    log(`Found: "${matchedItem.ar_title || matchedItem.en_title}" (ID: ${matchedItem.nb})`);
+    if (!matchedItem || !matchedItem.nb) return [];
 
     let targetVideoId = matchedItem.nb;
 
-    // إذا كان مسلسلاً، نصل لرقم الفيديو الخاص بالحلقة
     if (!isMovie) {
       targetVideoId = await resolveEpisodeVideoId(matchedItem.nb, s, e);
-      if (!targetVideoId) {
-        log(`Episode S${s}E${e} not found`);
-        return [];
-      }
+      if (!targetVideoId) return [];
     }
 
-    log(`Target Video ID: ${targetVideoId}`);
-
-    // استخراج الروابط المباشرة والترجمات
-    const streams = await extractStreams(targetVideoId, streamTitle);
-    log(`Returning ${streams.length} streams`);
-
-    return streams;
+    return await extractStreams(targetVideoId, streamTitle);
   } catch (err) {
     log(`General Error: ${err.message}`);
     return [];
