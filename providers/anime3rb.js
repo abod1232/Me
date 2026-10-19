@@ -1,5 +1,5 @@
 const CONFIG = {
-  tmdbApiKey: "1c29a5198ee1854bd5eb45dbe8d17d92",
+  tmdbApiKey: "439c478a771f35c05022f9feabcca01c",
   tmdbEndpoint: "https://api.themoviedb.org/3",
   host: "https://cinemana.shabakaty.cc",
   apiRoot: "https://cinemana.shabakaty.cc/api/android",
