@@ -119,12 +119,20 @@ async function collectSubtitles(videoId) {
     return ordered
       .filter((item) => typeof item.file === "string" && item.file.trim().length > 0)
       .map((item) => {
-        const isAss = (item.extention || "").toLowerCase() === "ass";
-        const label = item.name || "العربية";
+        const ext = (item.extention || "").toLowerCase();
+        const rawName = (item.name || "").toLowerCase();
+        const isAr = rawName.includes("ar") || ext === "ass" || !rawName;
+        
+        const langCode = isAr ? "ar" : "en";
+        const displayLabel = isAr ? (ext === "ass" ? "العربية (ASS)" : "العربية") : (item.name || "English");
+
         return {
           url: item.file.startsWith("http") ? item.file : `${CONFIG.host}${item.file}`,
-          lang: "Arabic",
-          name: isAss ? `${label} (ASS)` : label
+          lang: langCode,
+          language: langCode,
+          title: displayLabel,
+          label: displayLabel,
+          name: displayLabel
         };
       });
   } catch {
