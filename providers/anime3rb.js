@@ -1,190 +1,136 @@
-const TMDB_KEY = "1865f43a0549ca50d341dd9ab8b29f49";
+const TMDB_KEY = "1c29a5198ee1854bd5eb45dbe8d17d92";
 const TMDB = "https://api.themoviedb.org/3";
-const BASE_URL = "https://anime3rb.com";
-
+const MAIN = "https://anime3rb.com";
 const BROWSER_UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36";
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
 
 const log = (...a) => console.log("[Anime3rb]", ...a);
-
-let savedCookies = "";
 
 // ======================
 // Helper Functions
 // ======================
 
-async function fetchText(url, headers = {}) {
-  const reqHeaders = {
-    "User-Agent": BROWSER_UA,
-    ...headers
-  };
-  if (savedCookies) reqHeaders["Cookie"] = savedCookies;
+const norm = s => (s || "").toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]+/g, "").trim();
 
-  const res = await fetch(url, { headers: reqHeaders });
-  const setCookie = res.headers.get("set-cookie");
-  if (setCookie) savedCookies = setCookie;
-
-  return await res.text();
-}
-
-async function fetchJson(url, headers = {}) {
-  const res = await fetch(url, {
-    headers: { "User-Agent": BROWSER_UA, ...headers }
+async function fetchHtml(url, headers = {}) {
+  const r = await fetch(url, {
+    headers: {
+      "User-Agent": BROWSER_UA,
+      Referer: `${MAIN}/`,
+      ...headers
+    }
   });
-  return await res.json();
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.text();
 }
-
-function decodeEntities(str) {
-  if (!str) return "";
-  return str
-    .replace(/&quot;/g, '"')
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&#39;/g, "'");
-}
-
-// ======================
-// TMDB Title Resolver
-// ======================
 
 async function tmdbTitles(tmdbId, mediaType) {
-  try {
-    const type = mediaType === "tv" ? "tv" : "movie";
-    let realId = tmdbId;
-
-    if (String(tmdbId).startsWith("tt")) {
-      const findData = await fetchJson(
-        `${TMDB}/find/${tmdbId}?api_key=${TMDB_KEY}&external_source=imdb_id`
-      );
-      realId =
-        type === "movie"
-          ? findData?.movie_results?.[0]?.id
-          : findData?.tv_results?.[0]?.id;
-    }
-
-    if (!realId) return [];
-
-    const d = await fetchJson(
-      `${TMDB}/${type}/${realId}?api_key=${TMDB_KEY}&append_to_response=alternative_titles`
-    );
-    const main = d.name || d.title || "";
-    const alt = ((d.alternative_titles || {}).results || []).map(t => t.title);
-    return [main, ...alt].filter(Boolean);
-  } catch (err) {
-    log("TMDB error:", err.message);
-    return [];
-  }
+  const type = mediaType === "movie" ? "movie" : "tv";
+  const res = await fetch(`${TMDB}/${type}/${tmdbId}?api_key=${TMDB_KEY}&append_to_response=alternative_titles`);
+  const d = await res.json();
+  const main = d.name || d.title || "";
+  const alt = ((d.alternative_titles || {}).results || []).map(t => t.title);
+  return {
+    titles: [main, ...alt].filter(Boolean),
+    year: (d.first_air_date || d.release_date || "").split("-")[0] || null
+  };
 }
 
 // ======================
-// Anime3rb Search (Livewire)
+// Search (Direct GET without Livewire)
 // ======================
 
-async function searchAnime(query) {
-  try {
-    const html = await fetchText(BASE_URL);
+async function search(query) {
+  // بحث مباشر عبر GET لتجنب مشاكل Livewire والـ Tokens
+  const searchUrls = [
+    `${MAIN}/titles?q=${encodeURIComponent(query)}`,
+    `${MAIN}/search?q=${encodeURIComponent(query)}`
+  ];
 
-    // استخراج CSRF Token بواسطة Regex بدلاً من Cheerio
-    const csrfMatch =
-      html.match(/data-csrf="([^"]+)"/i) ||
-      html.match(/script[^>]+data-csrf="([^"]+)"/i);
-    const csrfToken = csrfMatch ? csrfMatch[1] : null;
-
-    // استخراج Livewire Snapshot بواسطة Regex
-    const snapMatch = html.match(/wire:snapshot="([^"]+)"/i);
-    const snapshotRaw = snapMatch ? snapMatch[1] : null;
-
-    if (!csrfToken || !snapshotRaw) {
-      log("Livewire tokens not found");
-      return null;
-    }
-
-    const snapshotStr = decodeEntities(snapshotRaw);
-    const updateUrl = `${BASE_URL}/livewire/update`;
-
-    const payload = {
-      _token: csrfToken,
-      components: [
-        {
-          snapshot: snapshotStr,
-          updates: { query: query },
-          calls: []
+  for (const url of searchUrls) {
+    try {
+      const html = await fetchHtml(url);
+      const items = [];
+      
+      // استخراج بطاقات الأنمي من نتائج البحث
+      const cardRegex = /<a[^>]+href="([^"]*\/titles\/[^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
+      let match;
+      while ((match = cardRegex.exec(html)) !== null) {
+        const link = match[1];
+        const inner = match[2];
+        const titleMatch = inner.match(/<h[34][^>]*>([\s\S]*?)<\/h[34]>/i) || inner.match(/class="[^"]*title[^"]*"[^>]*>([\s\S]*?)<\//i);
+        const title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, "").trim() : "";
+        
+        if (link && title) {
+          items.push({
+            title,
+            url: link.startsWith("http") ? link : `${MAIN}${link}`
+          });
         }
-      ]
-    };
-
-    const res = await fetch(updateUrl, {
-      method: "POST",
-      headers: {
-        "User-Agent": BROWSER_UA,
-        "Content-Type": "application/json",
-        Accept: "*/*",
-        Origin: BASE_URL,
-        Referer: `${BASE_URL}/`,
-        Cookie: savedCookies
-      },
-      body: JSON.stringify(payload)
-    });
-
-    const resJson = await res.json();
-    const htmlContent = resJson?.components?.[0]?.effects?.html || "";
-
-    // استخراج أول رابط لبطاقة أنمي
-    const linkMatch =
-      htmlContent.match(/<a[^>]*class="[^"]*simple-title-card[^"]*"[^>]*href="([^"]+)"/i) ||
-      htmlContent.match(/<a[^>]*href="([^"]+)"[^>]*class="[^"]*simple-title-card[^"]*"/i);
-
-    if (!linkMatch) return null;
-    const link = linkMatch[1];
-    return link.startsWith("http") ? link : `${BASE_URL}${link}`;
-  } catch (e) {
-    log("Search error:", e.message);
-    return null;
+      }
+      if (items.length) return items;
+    } catch {
+      continue;
+    }
   }
+  return [];
+}
+
+const exactMatch = (items, title) => {
+  const t = norm(title);
+  return items.find(i => norm(i.title) === t);
+};
+
+const closeMatch = (items, title) => {
+  const t = norm(title);
+  return items.find(i => {
+    const n = norm(i.title);
+    return n && (n.includes(t) || t.includes(n));
+  });
+};
+
+async function findAnime(titles) {
+  for (const t of titles) {
+    let items = [];
+    try { items = await search(t); } catch { continue; }
+    const hit = exactMatch(items, t) || closeMatch(items, t);
+    if (hit) return hit;
+  }
+  return null;
 }
 
 // ======================
-// Vid3rb Player Extractor
+// Video Extractor
 // ======================
 
-async function extractVid3rb(episodeUrl) {
+async function extractStreamsFromPlayer(playerUrl, streamTitle) {
   try {
-    const epHtml = await fetchText(episodeUrl);
-
-    // استخراج رابط مشغل vid3rb
-    const playerPattern = /https:(?:\\\/|\/){2}video\.vid3rb\.com(?:\\\/|\/)player(?:\\\/|\/)[^"' \s]+/i;
-    const match = epHtml.match(playerPattern);
-    if (!match) return [];
-
-    const playerUrl = match[0].replace(/\\/g, "").replace(/&amp;/g, "&");
-
-    const playerHtml = await fetchText(playerUrl, {
-      Host: "video.vid3rb.com",
-      Referer: `${BASE_URL}/`
+    const playerHtml = await fetchHtml(playerUrl, {
+      Referer: `${MAIN}/`,
+      Host: "video.vid3rb.com"
     });
 
-    // استخراج مصفوفة السيرفرات
     const jsonMatch = playerHtml.match(/var\s+video_sources\s*=\s*(\[[\s\S]*?\]);/);
     if (!jsonMatch) return [];
 
-    const videoSources = JSON.parse(jsonMatch[1]);
-    const streams = [];
+    const sources = JSON.parse(jsonMatch[1]);
+    const out = [];
 
-    for (const item of videoSources) {
+    for (const item of sources) {
       if (item.premium === true || item.premium === "true") continue;
+      
+      const rawUrl = item.src || item.file;
+      if (!rawUrl) continue;
 
-      let src = item.src ? item.src.replace(/\\/g, "").replace(/&amp;/g, "&") : null;
-      if (!src) continue;
-
+      const url = rawUrl.replace(/\\/g, "").replace(/&amp;/g, "&");
       const label = item.label || "HD";
-      const qualityMatch = label.match(/\d+/);
-      const quality = qualityMatch ? `${qualityMatch[0]}p` : "720p";
+      const qMatch = label.match(/\d+/);
+      const quality = qMatch ? `${qMatch[0]}p` : label;
 
-      streams.push({
+      out.push({
         name: `Anime3rb - ${label}`,
-        title: `Anime3rb (${label})`,
-        url: src,
+        title: streamTitle,
+        url: url,
         quality: quality,
         size: "Unknown",
         headers: {
@@ -195,78 +141,84 @@ async function extractVid3rb(episodeUrl) {
       });
     }
 
-    return streams;
-  } catch (e) {
-    log("Extractor error:", e.message);
+    return out;
+  } catch (err) {
+    log(`extract error: ${err.message}`);
     return [];
   }
 }
 
 // ======================
-// Main getStreams Function
+// Main Function (getStreams)
 // ======================
 
 async function getStreams(tmdbId, mediaType = "movie", seasonNum = null, episodeNum = null) {
   const isMovie = mediaType === "movie";
   const s = seasonNum || 1;
   const e = episodeNum || 1;
-
   log(`tmdb=${tmdbId} type=${mediaType}${isMovie ? "" : ` S${s}E${e}`}`);
 
   try {
-    const titles = await tmdbTitles(tmdbId, mediaType);
-    if (!titles.length) {
-      log("No titles found on TMDB");
+    const { titles, year } = await tmdbTitles(tmdbId, mediaType);
+    if (!titles.length) return [];
+    
+    const title = titles[0];
+    log(`tmdb: "${title}" (${year})${titles.length > 1 ? ` +${titles.length - 1} alt` : ""}`);
+    const streamTitle = `${title}${isMovie ? (year ? ` (${year})` : "") : ` S${String(s).padStart(2, "0")}E${String(e).padStart(2, "0")}`}`;
+
+    // 1. البحث عن صفحة الأنمي
+    const anime = await findAnime(titles);
+    if (!anime) {
+      log("not found on Anime3rb");
       return [];
     }
+    log(`matched: "${anime.title}" -> ${anime.url}`);
 
-    log(`Searching for: ${titles[0]}`);
-
-    let animeUrl = null;
-    for (const title of titles.slice(0, 3)) {
-      animeUrl = await searchAnime(title);
-      if (animeUrl) break;
-    }
-
-    if (!animeUrl) {
-      log("Anime not found on Anime3rb");
-      return [];
-    }
-
-    log(`Found Anime page: ${animeUrl}`);
-
-    const animePageHtml = await fetchText(animeUrl);
-
-    // استخراج روابط الحلقات بواسطة Regex
+    // 2. قراءة صفحة الأنمي للوصول لرابط الحلقة المطلوبة
+    const animePageHtml = await fetchHtml(anime.url);
     const epRegex = /<a[^>]+href="([^"]*\/episode\/[^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
+    
     let epMatch;
-    let targetEpisodeUrl = null;
-    let firstEpisodeUrl = null;
+    let targetEpUrl = null;
+    let firstEpUrl = null;
 
     while ((epMatch = epRegex.exec(animePageHtml)) !== null) {
-      const href = epMatch[1];
-      const innerText = epMatch[2].replace(/<[^>]+>/g, " ").trim();
-      const numMatch = innerText.match(/\d+/);
+      const link = epMatch[1];
+      const text = epMatch[2].replace(/<[^>]+>/g, " ").trim();
+      const numMatch = text.match(/\d+/);
+      const fullUrl = link.startsWith("http") ? link : `${MAIN}${link}`;
 
-      const fullHref = href.startsWith("http") ? href : `${BASE_URL}${href}`;
-      if (!firstEpisodeUrl) firstEpisodeUrl = fullHref;
+      if (!firstEpUrl) firstEpUrl = fullUrl;
 
       if (numMatch && parseInt(numMatch[0], 10) === e) {
-        targetEpisodeUrl = fullHref;
+        targetEpUrl = fullUrl;
         break;
       }
     }
 
-    // إذا لم يجد الحلقة برقمها المباشر يأخذ الحلقة الأولى أو الرابط الحالي
-    const finalUrl = targetEpisodeUrl || firstEpisodeUrl || animeUrl;
-    log(`Selected Episode URL: ${finalUrl}`);
+    const episodeUrl = targetEpUrl || firstEpUrl || anime.url;
+    log(`target episode url: ${episodeUrl}`);
 
-    const streams = await extractVid3rb(finalUrl);
-    log(`Returning ${streams.length} streams`);
+    // 3. قراءة صفحة الحلقة لاستخراج رابط المشغل
+    const epHtml = await fetchHtml(episodeUrl);
+    const playerPattern = /https:(?:\\\/|\/){2}video\.vid3rb\.com(?:\\\/|\/)player(?:\\\/|\/)[^"' \s]+/i;
+    const playerMatch = epHtml.match(playerPattern);
 
+    if (!playerMatch) {
+      log("player iframe not found");
+      return [];
+    }
+
+    const playerUrl = playerMatch[0].replace(/\\/g, "").replace(/&amp;/g, "&");
+    log(`player url found: ${playerUrl}`);
+
+    // 4. استخراج روابط التشغيل المباشرة
+    const streams = await extractStreamsFromPlayer(playerUrl, streamTitle);
+    log(`returning ${streams.length} streams`);
     return streams;
+
   } catch (err) {
-    log(`Error: ${err.message}`);
+    log(`error: ${err.message}`);
     return [];
   }
 }
