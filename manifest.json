@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "scrapers": [
     {
-      "id": "Anime3rb",
-      "name": "Anime3rb",
+      "id": "cinemana",
+      "name": "cinemana",
       "description": "مشاهدة الأنمي المترجم عبر سيرفرات Anime3rb",
       "version": "1.0.0",
       "author": "abod1232",
